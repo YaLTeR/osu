@@ -11,6 +11,7 @@ using System.Diagnostics;
 using osu.Framework.Graphics;
 using osu.Game.Rulesets.Objects.Types;
 using osu.Game.Rulesets.Replays;
+using System.Collections.Generic;
 
 namespace osu.Game.Rulesets.Osu.Replays
 {
@@ -47,6 +48,9 @@ namespace osu.Game.Rulesets.Osu.Replays
         {
             // Already superhuman, but still somewhat realistic
             reactionTime = ApplyModsToRate(100);
+
+            FirstPass = new List<FirstPassFrame>();
+            Spins = new List<Spin>();
         }
 
         #endregion
@@ -60,6 +64,18 @@ namespace osu.Game.Rulesets.Osu.Replays
         /// </summary>
         private int buttonIndex;
 
+        /// <summary>
+        /// List of frames filled during the first pass through the beatmap.
+        /// Contains frames for circles and sliders.
+        /// </summary>
+        private List<FirstPassFrame> FirstPass;
+
+        /// <summary>
+        /// List of time ranges where Auto should spin.
+        /// Filled during the first pass through the beatmap.
+        /// </summary>
+        private List<Spin> Spins;
+
         public override Replay Generate()
         {
             buttonIndex = 0;
@@ -68,21 +84,55 @@ namespace osu.Game.Rulesets.Osu.Replays
             AddFrameToReplay(new ReplayFrame(Beatmap.HitObjects[0].StartTime - 1500, 256, 500, ReplayButtonState.None));
             AddFrameToReplay(new ReplayFrame(Beatmap.HitObjects[0].StartTime - 1000, 256, 192, ReplayButtonState.None));
 
-            for (int i = 0; i < Beatmap.HitObjects.Count; i++)
+            // First pass: fill out the important frames for circles and sliders, as well as the Spins list.
+            foreach (var h in Beatmap.HitObjects)
             {
-                OsuHitObject h = Beatmap.HitObjects[i];
-
-                if (DelayedMovements && i > 0)
-                {
-                    OsuHitObject prev = Beatmap.HitObjects[i - 1];
-                    addDelayedMovements(h, prev);
-                }
-
-                addHitObjectReplay(h);
+                addImportantFrames(h);
             }
+
+            // Second pass: add the spin frames.
+            foreach (var spin in Spins)
+            {
+                addSpinFrames(spin);
+            }
+
+            // Third pass: resolve conflicts (like multiple different slider ticks on one frame),
+            // add slider following and other cosmetics (snapping, etc.).
+            // This all is TODO.
+            for (int i = 0; i < FirstPass.Count - 1; i++)
+            {
+                var frame = FirstPass[i];
+                var nextFrame = FirstPass[i + 1];
+
+                AddFrameToReplay(new ReplayFrame(frame.Time, frame.Position.X, frame.Position.Y, ReplayButtonState.Left1));
+
+                if (nextFrame.Type == FrameType.CLICK)
+                    AddFrameToReplay(new ReplayFrame(frame.Time, frame.Position.X, frame.Position.Y, ReplayButtonState.None));
+            }
+
+            if (FirstPass.Count > 0)
+            {
+                var lastFrame = FirstPass[FirstPass.Count - 1];
+                AddFrameToReplay(new ReplayFrame(lastFrame.Time, lastFrame.Position.X, lastFrame.Position.Y, ReplayButtonState.Left1));
+                AddFrameToReplay(new ReplayFrame(lastFrame.Time, lastFrame.Position.X, lastFrame.Position.Y, ReplayButtonState.None));
+            }
+
+            //for (int i = 0; i < Beatmap.HitObjects.Count; i++)
+            //{
+            //    OsuHitObject h = Beatmap.HitObjects[i];
+
+            //    if (DelayedMovements && i > 0)
+            //    {
+            //        OsuHitObject prev = Beatmap.HitObjects[i - 1];
+            //        addDelayedMovements(h, prev);
+            //    }
+
+            //    addHitObjectReplay(h);
+            //}
 
             return Replay;
         }
+
 
         private void addDelayedMovements(OsuHitObject h, OsuHitObject prev)
         {
@@ -137,6 +187,75 @@ namespace osu.Game.Rulesets.Osu.Replays
 
             // Add frames to click the hitobject
             addHitObjectClickFrames(h, startPosition, spinnerDirection);
+        }
+
+        private void addImportantFrames(OsuHitObject h)
+        {
+            if (h is Slider)
+            {
+                var slider = h as Slider;
+
+                // Sliders need a click on their start circle and a hold on each tick.
+                AddFirstPassFrame(new FirstPassFrame(slider.Position, slider.StartTime, FrameType.CLICK, slider));
+
+                foreach (var tick in slider.Ticks)
+                {
+                    AddFirstPassFrame(new FirstPassFrame(tick.Position, tick.StartTime, FrameType.SLIDER_TICK, slider));
+                }
+
+                // Repeats and slider ends are not required currently, but add them anyway.
+                // TODO: add method in Slider to return repeats? Or, even better, add them to Ticks?
+                var length = slider.Curve.Distance;
+                var repeatDuration = length / slider.Velocity;
+                for (int repeat = 1; repeat <= slider.RepeatCount; repeat++)
+                {
+                    var repeatTime = repeat * repeatDuration;
+                    AddFirstPassFrame(new FirstPassFrame(slider.PositionAt(repeatTime / slider.Duration), repeatTime + slider.StartTime, FrameType.SLIDER_TICK, slider));
+                }
+            }
+            else if (h is Spinner)
+            {
+                // Spinners need to be added to Spins.
+                AddSpin(h as Spinner);
+            }
+            else
+            {
+                // Normal circles are simply clicked.
+                AddFirstPassFrame(new FirstPassFrame(h.Position, h.StartTime, FrameType.CLICK));
+            }
+        }
+
+        private void addSpinFrames(Spin spin)
+        {
+            int prevFrameIndex = FirstPass.FindLastIndex((frame) => frame.Time <= spin.StartTime);
+
+            // TODO: make the "else" part independent on Frames?
+            Vector2 prevPos = (prevFrameIndex != -1) ? FirstPass[prevFrameIndex].Position
+                                                     : Frames[Frames.Count - 1].Position;
+
+            Vector2 startPosition;
+            float spinnerDirection;
+            calcSpinnerStartPosAndDirection(prevPos, out startPosition, out spinnerDirection);
+
+            // Add the frames.
+            Vector2 difference = startPosition - SPINNER_CENTRE;
+
+            float radius = difference.Length;
+            float angle = radius == 0 ? 0 : (float)Math.Atan2(difference.Y, difference.X);
+
+            double t;
+
+            for (double j = spin.StartTime + FrameDelay; j < spin.EndTime; j += FrameDelay)
+            {
+                t = ApplyModsToTime(j - spin.StartTime) * spinnerDirection;
+
+                Vector2 pos = SPINNER_CENTRE + CirclePosition(t / 20 + angle, SPIN_RADIUS);
+                AddFirstPassFrame(new FirstPassFrame(pos, j, FrameType.SPIN));
+            }
+
+            t = ApplyModsToTime(spin.EndTime - spin.StartTime) * spinnerDirection;
+            Vector2 endPos = SPINNER_CENTRE + CirclePosition(t / 20 + angle, SPIN_RADIUS);
+            AddFirstPassFrame(new FirstPassFrame(endPos, spin.EndTime, FrameType.SPIN));
         }
 
         #endregion
@@ -327,6 +446,108 @@ namespace osu.Game.Rulesets.Osu.Replays
                 AddFrameToReplay(endFrame);
         }
 
+        #endregion
+
+        #region Utilities
+        private enum FrameType
+        {
+            CLICK,
+            SLIDER_TICK,
+            SPIN
+        }
+
+        private struct FirstPassFrame
+        {
+            public Vector2 Position;
+            public double Time;
+            public FrameType Type;
+
+            // If this frame is for handling a slider, this is the slider.
+            public Slider Slider;
+
+            public FirstPassFrame(Vector2 position, double time, FrameType type, Slider slider = null)
+            {
+                Position = position;
+                Time = time;
+                Type = type;
+                Slider = slider;
+            }
+        }
+
+        private class FirstPassFrameComparer : IComparer<FirstPassFrame>
+        {
+            public int Compare(FirstPassFrame f1, FirstPassFrame f2)
+            {
+                return f1.Time.CompareTo(f2.Time);
+            }
+        }
+
+        private static readonly IComparer<FirstPassFrame> first_pass_frame_comparer = new FirstPassFrameComparer();
+
+        private int FindFirstPassInsertionIndex(FirstPassFrame frame)
+        {
+            int index = FirstPass.BinarySearch(frame, first_pass_frame_comparer);
+
+            if (index < 0)
+            {
+                index = ~index;
+            }
+            else
+            {
+                // Go to the first index which is actually bigger.
+                // All clicks go before other types.
+                while (index < FirstPass.Count
+                       && frame.Time == FirstPass[index].Time
+                       && (frame.Type != FrameType.CLICK || FirstPass[index].Type == FrameType.CLICK))
+                {
+                    ++index;
+                }
+            }
+
+            return index;
+        }
+
+        private void AddFirstPassFrame(FirstPassFrame frame) => FirstPass.Insert(FindFirstPassInsertionIndex(frame), frame);
+
+        private struct Spin
+        {
+            public double StartTime;
+            public double EndTime;
+
+            public Spin(double startTime, double endTime)
+            {
+                StartTime = startTime;
+                EndTime = endTime;
+            }
+        }
+
+        private void AddSpin(Spinner spinner)
+        {
+            var spin = new Spin(spinner.StartTime, spinner.EndTime);
+
+            // If this spinner overlaps some other spin, merge them.
+            // First, figure out the applicable bounds.
+            int insert_after = Spins.FindLastIndex((s) => s.EndTime < spin.StartTime);
+            int insert_before = Spins.FindIndex((s) => s.StartTime > spin.EndTime);
+            if (insert_before == -1)
+                insert_before = Spins.Count;
+
+            // Now replace all spins between these bounds with one big spin.
+            // For maps without overlapping spinners there will be no spins between.
+            if (insert_before == insert_after + 1)
+            {
+                Spins.Insert(insert_after + 1, spin);
+            }
+            else
+            {
+                // Figure out the common interval.
+                double startTime = Math.Min(Spins[insert_after + 1].StartTime, spin.StartTime);
+                double endTime = Math.Max(Spins[insert_before - 1].EndTime, spin.EndTime);
+
+                Spins.RemoveRange(insert_after + 1, insert_before - insert_after - 1);
+                Spins.Insert(insert_after + 1, new Spin(startTime, endTime));
+            }
+        }
         #endregion
     }
 }
