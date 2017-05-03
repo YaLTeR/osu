@@ -84,21 +84,24 @@ namespace osu.Game.Rulesets.Osu.Replays
             AddFrameToReplay(new ReplayFrame(Beatmap.HitObjects[0].StartTime - 1500, 256, 500, ReplayButtonState.None));
             AddFrameToReplay(new ReplayFrame(Beatmap.HitObjects[0].StartTime - 1000, 256, 192, ReplayButtonState.None));
 
-            // First pass: fill out the important frames for circles and sliders, as well as the Spins list.
+            // First of all, fill out the important frames for circles and sliders, as well as the Spins list.
             foreach (var h in Beatmap.HitObjects)
             {
                 addImportantFrames(h);
             }
 
-            // Second pass: add the spin frames.
+            // Now add the spin frames from the Spins list.
             foreach (var spin in Spins)
             {
                 addSpinFrames(spin);
             }
 
-            // Third pass: resolve conflicts (like multiple different slider ticks on one frame),
-            // add slider following and other cosmetics (snapping, etc.).
-            // This all is TODO.
+            // Resolve conflicts like multiple different slider ticks on one frame.
+            resolveConflicts();
+
+            // Right now FirstPass can have multiple clicks per timestamp,
+            // but at most one hold (slider tick or spin) per timestamp, which will be satisfied after the clicks.
+
             for (int i = 0; i < FirstPass.Count - 1; i++)
             {
                 var frame = FirstPass[i];
@@ -256,6 +259,43 @@ namespace osu.Game.Rulesets.Osu.Replays
             t = ApplyModsToTime(spin.EndTime - spin.StartTime) * spinnerDirection;
             Vector2 endPos = SPINNER_CENTRE + CirclePosition(t / 20 + angle, SPIN_RADIUS);
             AddFirstPassFrame(new FirstPassFrame(endPos, spin.EndTime, FrameType.SPIN));
+        }
+
+        /// <summary>
+        /// Resolve conflicts like multiple different slider ticks on one frame.
+        /// </summary>
+        private void resolveConflicts()
+        {
+            for (int i = 0; i < FirstPass.Count; i++)
+            {
+                // Skip over the click frames.
+                if (FirstPass[i].Type == FrameType.CLICK)
+                    continue;
+
+                // If this is a spin frame there are no conflicts.
+                if (FirstPass[i].Type == FrameType.SPIN)
+                    continue;
+
+                // We will be dealing with frames [i; next).
+                int next;
+                for (next = i + 1; next < FirstPass.Count; next++)
+                {
+                    if (FirstPass[next].Time != FirstPass[i].Time || FirstPass[next].Type != FirstPass[i].Type)
+                        break;
+                }
+
+                // TODO: if we have a conflict, check if we can satisfy all (some) coordinates at the same time
+                // by positioning the cursor in the middle between two slider ticks, for example.
+                // For now, simply drop all but the first slider tick.
+                FirstPass.RemoveRange(i + 1, next - i - 1);
+                next -= (next - i - 1);
+
+                // If there are both slider tick and spin frame at this timestamp, drop the spin frame.
+                if (FirstPass[next].Time == FirstPass[i].Time)
+                    FirstPass.RemoveAt(next);
+
+                i = next - 1;
+            }
         }
 
         #endregion
@@ -451,7 +491,7 @@ namespace osu.Game.Rulesets.Osu.Replays
         #region Utilities
         private enum FrameType
         {
-            CLICK,
+            CLICK = 0,
             SLIDER_TICK,
             SPIN
         }
@@ -495,10 +535,10 @@ namespace osu.Game.Rulesets.Osu.Replays
             else
             {
                 // Go to the first index which is actually bigger.
-                // All clicks go before other types.
+                // Also order the frames by their type.
                 while (index < FirstPass.Count
                        && frame.Time == FirstPass[index].Time
-                       && (frame.Type != FrameType.CLICK || FirstPass[index].Type == FrameType.CLICK))
+                       && frame.Type < FirstPass[index].Type)
                 {
                     ++index;
                 }
