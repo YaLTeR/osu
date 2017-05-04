@@ -96,11 +96,14 @@ namespace osu.Game.Rulesets.Osu.Replays
                 addSpinFrames(spin);
             }
 
+            // Right now FirstPass can have multiple clicks and slider ticks per timestamp,
+            // but at most one spin.
+
             // Resolve conflicts like multiple different slider ticks on one frame.
             resolveConflicts();
 
             // Right now FirstPass can have multiple clicks per timestamp,
-            // but at most one hold (slider tick or spin) per timestamp, which will be satisfied after the clicks.
+            // but at most one hold (slider tick, spin or slider end) per timestamp, which will be satisfied after the clicks.
 
             for (int i = 0; i < FirstPass.Count - 1; i++)
             {
@@ -110,7 +113,29 @@ namespace osu.Game.Rulesets.Osu.Replays
                 AddFrameToReplay(new ReplayFrame(frame.Time, frame.Position.X, frame.Position.Y, ReplayButtonState.Left1));
 
                 if (nextFrame.Type == FrameType.CLICK)
+                {
                     AddFrameToReplay(new ReplayFrame(frame.Time, frame.Position.X, frame.Position.Y, ReplayButtonState.None));
+                }
+                else
+                {
+                    // Follow sliders.
+                    if (frame.Slider != null && nextFrame.Slider == frame.Slider)
+                    {
+                        // Using j += FrameDelay here (as it should be) makes the cursor be slightly ahead of the slider ball.
+                        // Replay interpolation issue? Using FrameDelay * 2 or / 2 looks correct even though
+                        // logically it doesn't change the result in this regard.
+                        // TODO: figure this out.
+
+                        // Idea: instead of using fixed FrameDelay consider calculating the optimal time offset
+                        // which keeps the Auto's cursor trail smooth through this slider's curve.
+                        // Currently really fast sliders make Auto have non-smooth cursor trail.
+                        for (double j = frame.Time + FrameDelay; j < nextFrame.Time; j += FrameDelay)
+                        {
+                            Vector2 pos = frame.Slider.PositionAt((j - frame.Slider.StartTime) / frame.Slider.Duration);
+                            AddFrameToReplay(new ReplayFrame(j, pos.X, pos.Y, ReplayButtonState.Left1));
+                        }
+                    }
+                }
             }
 
             if (FirstPass.Count > 0)
@@ -210,11 +235,17 @@ namespace osu.Game.Rulesets.Osu.Replays
                 // TODO: add method in Slider to return repeats? Or, even better, add them to Ticks?
                 var length = slider.Curve.Distance;
                 var repeatDuration = length / slider.Velocity;
-                for (int repeat = 1; repeat <= slider.RepeatCount; repeat++)
+                for (int repeat = 1; repeat < slider.RepeatCount; repeat++)
                 {
                     var repeatTime = repeat * repeatDuration;
                     AddFirstPassFrame(new FirstPassFrame(slider.PositionAt(repeatTime / slider.Duration), repeatTime + slider.StartTime, FrameType.SLIDER_TICK, slider));
                 }
+
+                // Assume there's a slider tick 36 ms before end like in osu!stable.
+                var time = Math.Max(slider.StartTime + slider.Duration / 2, slider.EndTime - 36);
+                AddFirstPassFrame(new FirstPassFrame(slider.PositionAt((time - slider.StartTime) / slider.Duration), time, FrameType.SLIDER_TICK, slider));
+
+                AddFirstPassFrame(new FirstPassFrame(slider.EndPosition, slider.EndTime, FrameType.SLIDER_END, slider));
             }
             else if (h is Spinner)
             {
@@ -259,6 +290,9 @@ namespace osu.Game.Rulesets.Osu.Replays
             t = ApplyModsToTime(spin.EndTime - spin.StartTime) * spinnerDirection;
             Vector2 endPos = SPINNER_CENTRE + CirclePosition(t / 20 + angle, SPIN_RADIUS);
             AddFirstPassFrame(new FirstPassFrame(endPos, spin.EndTime, FrameType.SPIN));
+
+            // TODO: perhaps also add spin frames at every click frame during the spin?
+            // This way clicks won't interfere with spinning.
         }
 
         /// <summary>
@@ -268,33 +302,78 @@ namespace osu.Game.Rulesets.Osu.Replays
         {
             for (int i = 0; i < FirstPass.Count; i++)
             {
-                // Skip over the click frames.
-                if (FirstPass[i].Type == FrameType.CLICK)
-                    continue;
-
-                // If this is a spin frame there are no conflicts.
-                if (FirstPass[i].Type == FrameType.SPIN)
-                    continue;
-
-                // We will be dealing with frames [i; next).
                 int next;
-                for (next = i + 1; next < FirstPass.Count; next++)
+
+                switch (FirstPass[i].Type)
                 {
-                    if (FirstPass[next].Time != FirstPass[i].Time || FirstPass[next].Type != FirstPass[i].Type)
+                    case FrameType.CLICK:
+                        // These are fine as they are.
+                        break;
+
+                    case FrameType.SLIDER_TICK:
+                        // We will be dealing with frames [i; next).
+                        for (next = i + 1; next < FirstPass.Count; next++)
+                        {
+                            if (FirstPass[next].Time != FirstPass[i].Time || FirstPass[next].Type != FirstPass[i].Type)
+                                break;
+                        }
+
+                        // TODO: if we have a conflict, check if we can satisfy all (some) coordinates at the same time
+                        // for example, by positioning the cursor in the middle between two slider ticks.
+                        // For now, simply drop all but the first slider tick.
+                        FirstPass.RemoveRange(i + 1, next - i - 1);
+                        next -= (next - i - 1);
+
+                        // Get rid of any remaining spins or slider ends.
+                        int temp = next;
+                        for (; next < FirstPass.Count; next++)
+                        {
+                            if (FirstPass[next].Time != FirstPass[i].Time)
+                                break;
+                        }
+
+                        FirstPass.RemoveRange(temp, next - temp);
+
+                        break;
+
+                    case FrameType.SPIN:
+                        // Get rid of any remaining slider ends.
+                        for (next = i + 1; next < FirstPass.Count; next++)
+                        {
+                            if (FirstPass[next].Time != FirstPass[i].Time)
+                                break;
+                        }
+
+                        FirstPass.RemoveRange(i + 1, next - i - 1);
+
+                        break;
+
+                    case FrameType.SLIDER_END:
+                        // If this slider end wasn't preceeded by a click or slider tick of the same slider, drop it.
+                        // This heavily increases nice-looking-ness of Auto on 2B maps.
+                        // The slider tick 36 ms before end prevents this from going overboard.
+                        if (i <= 0 || FirstPass[i - 1].Slider != FirstPass[i].Slider)
+                        {
+                            FirstPass.RemoveAt(i);
+                            i--;
+                            continue;
+                        }
+
+                        // Same logic as slider ticks.
+                        // We will be dealing with frames [i; next).
+                        for (next = i + 1; next < FirstPass.Count; next++)
+                        {
+                            if (FirstPass[next].Time != FirstPass[i].Time)
+                                break;
+                        }
+
+                        // TODO: if we have a conflict, check if we can satisfy all (some) coordinates at the same time
+                        // for example, by positioning the cursor in the middle between two slider ends.
+                        // For now, simply drop all but the first slider end.
+                        FirstPass.RemoveRange(i + 1, next - i - 1);
+
                         break;
                 }
-
-                // TODO: if we have a conflict, check if we can satisfy all (some) coordinates at the same time
-                // by positioning the cursor in the middle between two slider ticks, for example.
-                // For now, simply drop all but the first slider tick.
-                FirstPass.RemoveRange(i + 1, next - i - 1);
-                next -= (next - i - 1);
-
-                // If there are both slider tick and spin frame at this timestamp, drop the spin frame.
-                if (FirstPass[next].Time == FirstPass[i].Time)
-                    FirstPass.RemoveAt(next);
-
-                i = next - 1;
             }
         }
 
@@ -489,11 +568,13 @@ namespace osu.Game.Rulesets.Osu.Replays
         #endregion
 
         #region Utilities
+        // Sorted by importance.
         private enum FrameType
         {
             CLICK = 0,
             SLIDER_TICK,
-            SPIN
+            SPIN,
+            SLIDER_END
         }
 
         private struct FirstPassFrame
@@ -538,7 +619,7 @@ namespace osu.Game.Rulesets.Osu.Replays
                 // Also order the frames by their type.
                 while (index < FirstPass.Count
                        && frame.Time == FirstPass[index].Time
-                       && frame.Type < FirstPass[index].Type)
+                       && frame.Type > FirstPass[index].Type)
                 {
                     ++index;
                 }
