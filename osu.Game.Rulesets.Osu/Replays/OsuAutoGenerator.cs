@@ -626,7 +626,7 @@ namespace osu.Game.Rulesets.Osu.Replays
                 // Also order the frames by their type.
                 while (index < FirstPass.Count
                        && frame.Time == FirstPass[index].Time
-                       && frame.Type > FirstPass[index].Type)
+                       && frame.Type >= FirstPass[index].Type)
                 {
                     ++index;
                 }
