@@ -158,6 +158,113 @@ namespace osu.Desktop.VisualTests.Tests
 
             time += 1500;
 
+            // Slider + slider, non-overlapping ticks.
+            objects.Add(new Slider
+            {
+                StartTime = time,
+                ControlPoints = new List<Vector2>
+                {
+                    new Vector2(100, 0),
+                    new Vector2(300, 0),
+                },
+                Distance = 200,
+                Position = new Vector2(100, 0),
+                Velocity = 0.2
+            });
+
+            time += 250;
+
+            objects.Add(new Slider
+            {
+                StartTime = time,
+                ControlPoints = new List<Vector2>
+                {
+                    new Vector2(150, 200),
+                    new Vector2(350, 200),
+                },
+                Distance = 200,
+                Position = new Vector2(150, 200),
+                Velocity = 0.2
+            });
+
+            time += 2250;
+
+            // Slider + slider, overlapping ticks.
+            objects.Add(new Slider
+            {
+                StartTime = time,
+                ControlPoints = new List<Vector2>
+                {
+                    new Vector2(100, 0),
+                    new Vector2(300, 0),
+                },
+                Distance = 200,
+                Position = new Vector2(100, 0),
+                Velocity = 0.2
+            });
+
+            objects.Add(new Slider
+            {
+                StartTime = time,
+                ControlPoints = new List<Vector2>
+                {
+                    new Vector2(100, 200),
+                    new Vector2(300, 200),
+                },
+                Distance = 200,
+                Position = new Vector2(100, 200),
+                Velocity = 0.2
+            });
+
+            time += 2500;
+
+            // Spinner + different stuff.
+            objects.Add(new Spinner
+            {
+                StartTime = time,
+                EndTime = time + 5000,
+                Position = OsuPlayfield.BASE_SIZE / 2
+            });
+
+            time += 250;
+
+            objects.Add(new HitCircle
+            {
+                StartTime = time,
+                Position = new Vector2(100, 0)
+            });
+
+            time += 250;
+
+            objects.Add(new HitCircle
+            {
+                StartTime = time,
+                Position = new Vector2(200, 0)
+            });
+
+            time += 250;
+
+            objects.Add(new HitCircle
+            {
+                StartTime = time,
+                Position = new Vector2(300, 0)
+            });
+
+            time += 250;
+
+            objects.Add(new Slider
+            {
+                StartTime = time,
+                ControlPoints = new List<Vector2>
+                {
+                    new Vector2(400, 0),
+                    new Vector2(400, 200),
+                },
+                Distance = 200,
+                Position = new Vector2(400, 0),
+                Velocity = 0.2
+            });
+
             objects.Sort((x, y) =>
             {
                 var endTime1 = (x as IHasEndTime)?.EndTime ?? x.StartTime;
