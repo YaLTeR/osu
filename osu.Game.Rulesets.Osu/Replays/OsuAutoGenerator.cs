@@ -335,7 +335,7 @@ namespace osu.Game.Rulesets.Osu.Replays
                         int temp = next;
                         for (; next < FirstPass.Count; next++)
                         {
-                            if (FirstPass[next].Time != FirstPass[i].Time)
+                            if (FirstPass[next].Time != FirstPass[i].Time || FirstPass[next].Type == FrameType.CLICK)
                                 break;
                         }
 
@@ -347,7 +347,7 @@ namespace osu.Game.Rulesets.Osu.Replays
                         // Get rid of any remaining slider ends.
                         for (next = i + 1; next < FirstPass.Count; next++)
                         {
-                            if (FirstPass[next].Time != FirstPass[i].Time)
+                            if (FirstPass[next].Time != FirstPass[i].Time || FirstPass[next].Type == FrameType.CLICK)
                                 break;
                         }
 
@@ -370,7 +370,7 @@ namespace osu.Game.Rulesets.Osu.Replays
                         // We will be dealing with frames [i; next).
                         for (next = i + 1; next < FirstPass.Count; next++)
                         {
-                            if (FirstPass[next].Time != FirstPass[i].Time)
+                            if (FirstPass[next].Time != FirstPass[i].Time || FirstPass[next].Type == FrameType.CLICK)
                                 break;
                         }
 
@@ -576,12 +576,14 @@ namespace osu.Game.Rulesets.Osu.Replays
 
         #region Utilities
         // Sorted by importance.
+        // Positional stuff like slider ticks is handled by the game first.
+        // Clicks are handled individually later.
         private enum FrameType
         {
-            CLICK = 0,
             SLIDER_TICK,
             SPIN,
-            SLIDER_END
+            SLIDER_END,
+            CLICK
         }
 
         private struct FirstPassFrame
