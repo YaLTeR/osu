@@ -114,7 +114,14 @@ namespace osu.Game.Rulesets.Osu.Replays
 
                 if (nextFrame.Type == FrameType.CLICK)
                 {
-                    AddFrameToReplay(new ReplayFrame(frame.Time, frame.Position.X, frame.Position.Y, ReplayButtonState.None));
+                    var releaseTime = frame.Time;
+
+                    // Only add KEY_UP_DELAY after clicks.
+                    // Other frame types already had the button held for some time.
+                    if (frame.Type == FrameType.CLICK)
+                        releaseTime = Math.Min(frame.Time + KEY_UP_DELAY, nextFrame.Time);
+
+                    AddFrameToReplay(new ReplayFrame(releaseTime, frame.Position.X, frame.Position.Y, ReplayButtonState.None));
                 }
                 else
                 {
